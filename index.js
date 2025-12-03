@@ -1,7 +1,7 @@
+require('dotenv').config();
 const express = require('express');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const { Pool } = require('pg');
-require('dotenv').config();
 
 const app = express();
 
@@ -76,92 +76,157 @@ async function storeWebhookEvent(event) {
   }
 }
 
+// Create Checkout Session Endpoint
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const { amount, currency = 'usd', productName = 'Custom Payment', metadata = {} } = req.body;
+
+    if (!amount) {
+      return res.status(400).json({ error: 'Amount is required' });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: currency,
+            product_data: {
+              name: productName,
+            },
+            unit_amount: amount, // Amount in cents
+          },
+          quantity: 1,
+        },
+      ],
+      mode: 'payment',
+      success_url: `http://localhost:${PORT}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `http://localhost:${PORT}/cancel`,
+      metadata: metadata,
+    });
+
+    res.json({ id: session.id, url: session.url });
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-
-  let event;
-
   try {
+    const sig = req.headers['stripe-signature'];
+
+    if (!sig) {
+      console.error('❌ No stripe-signature header value was provided.');
+      console.log('Headers received:', JSON.stringify(req.headers, null, 2));
+      return res.status(400).json({ error: { code: '400', message: 'No stripe-signature header value was provided.' } });
+    }
+
+    let event;
+
     // Verify the webhook signature
-    event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
-  } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
+    } catch (err) {
+      console.error('Webhook signature verification failed:', err.message);
+      return res.status(400).json({ error: { code: '400', message: `Webhook signature verification failed: ${err.message}` } });
+    }
+
+    // Store event in database first
+    try {
+      await storeWebhookEvent(event);
+    } catch (dbError) {
+      console.error('Failed to store event in database:', dbError);
+      // Continue processing even if DB storage fails
+    }
+
+    // Handle the event
+    console.log(`Received event: ${event.type}`);
+
+    switch (event.type) {
+      case 'payment_intent.succeeded':
+        const paymentIntent = event.data.object;
+        console.log('PaymentIntent succeeded:', paymentIntent.id);
+        // Handle successful payment
+        break;
+
+      case 'payment_intent.payment_failed':
+        const failedPayment = event.data.object;
+        console.log('PaymentIntent failed:', failedPayment.id);
+        // Handle failed payment
+        break;
+
+      case 'customer.created':
+        const customer = event.data.object;
+        console.log('Customer created:', customer.id);
+        // Handle customer creation
+        break;
+
+      case 'customer.updated':
+        const updatedCustomer = event.data.object;
+        console.log('Customer updated:', updatedCustomer.id);
+        // Handle customer update
+        break;
+
+      case 'invoice.payment_succeeded':
+        const invoice = event.data.object;
+        console.log('Invoice payment succeeded:', invoice.id);
+        // Handle successful invoice payment
+        break;
+
+      case 'invoice.payment_failed':
+        const failedInvoice = event.data.object;
+        console.log('Invoice payment failed:', failedInvoice.id);
+        // Handle failed invoice payment
+        break;
+
+      case 'subscription.created':
+        const subscription = event.data.object;
+        console.log('Subscription created:', subscription.id);
+        // Handle subscription creation
+        break;
+
+      case 'subscription.updated':
+        const updatedSubscription = event.data.object;
+        console.log('Subscription updated:', updatedSubscription.id);
+        // Handle subscription update
+        break;
+
+      case 'subscription.deleted':
+        const deletedSubscription = event.data.object;
+        console.log('Subscription deleted:', deletedSubscription.id);
+        // Handle subscription deletion
+        break;
+
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        console.log('Checkout session completed:', session.id);
+        // Handle successful checkout session
+        break;
+
+      case 'checkout.session.async_payment_failed':
+        const failedSession = event.data.object;
+        console.log('Checkout session async payment failed:', failedSession.id);
+        // Handle failed checkout session
+        break;
+
+      case 'checkout.session.expired':
+        const expiredSession = event.data.object;
+        console.log('Checkout session expired:', expiredSession.id);
+        // Handle expired checkout session
+        break;
+
+      default:
+        console.log(`Unhandled event type: ${event.type}`);
+    }
+
+    // Return a response to acknowledge receipt of the event
+    res.json({ received: true, eventId: event.id, eventType: event.type });
+  } catch (error) {
+    console.error('❌ Error processing webhook:', error);
+    res.status(500).json({ error: { code: '500', message: 'A server error has occurred' } });
   }
-
-  // Store event in database first
-  try {
-    await storeWebhookEvent(event);
-  } catch (dbError) {
-    console.error('Failed to store event in database:', dbError);
-    // Continue processing even if DB storage fails
-  }
-
-  // Handle the event
-  console.log(`Received event: ${event.type}`);
-
-  switch (event.type) {
-    case 'payment_intent.succeeded':
-      const paymentIntent = event.data.object;
-      console.log('PaymentIntent succeeded:', paymentIntent.id);
-      // Handle successful payment
-      break;
-
-    case 'payment_intent.payment_failed':
-      const failedPayment = event.data.object;
-      console.log('PaymentIntent failed:', failedPayment.id);
-      // Handle failed payment
-      break;
-
-    case 'customer.created':
-      const customer = event.data.object;
-      console.log('Customer created:', customer.id);
-      // Handle customer creation
-      break;
-
-    case 'customer.updated':
-      const updatedCustomer = event.data.object;
-      console.log('Customer updated:', updatedCustomer.id);
-      // Handle customer update
-      break;
-
-    case 'invoice.payment_succeeded':
-      const invoice = event.data.object;
-      console.log('Invoice payment succeeded:', invoice.id);
-      // Handle successful invoice payment
-      break;
-
-    case 'invoice.payment_failed':
-      const failedInvoice = event.data.object;
-      console.log('Invoice payment failed:', failedInvoice.id);
-      // Handle failed invoice payment
-      break;
-
-    case 'subscription.created':
-      const subscription = event.data.object;
-      console.log('Subscription created:', subscription.id);
-      // Handle subscription creation
-      break;
-
-    case 'subscription.updated':
-      const updatedSubscription = event.data.object;
-      console.log('Subscription updated:', updatedSubscription.id);
-      // Handle subscription update
-      break;
-
-    case 'subscription.deleted':
-      const deletedSubscription = event.data.object;
-      console.log('Subscription deleted:', deletedSubscription.id);
-      // Handle subscription deletion
-      break;
-
-    default:
-      console.log(`Unhandled event type: ${event.type}`);
-  }
-
-  // Return a response to acknowledge receipt of the event
-  res.json({ received: true, eventId: event.id, eventType: event.type });
 });
 
 // Health check endpoint

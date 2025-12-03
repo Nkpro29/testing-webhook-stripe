@@ -77,7 +77,49 @@ Get a specific event by Stripe event ID.
 curl http://localhost:3000/events/evt_1234567890
 ```
 
-## Stripe Webhook Configuration
+## Local Testing with Stripe CLI
+
+The `stripe-signature` header is **automatically set by Stripe** - you don't need to set it manually. For local testing, use Stripe CLI:
+
+1. **Install Stripe CLI:**
+   ```bash
+   # macOS
+   brew install stripe/stripe-cli/stripe
+   
+   # Or download from https://stripe.com/docs/stripe-cli
+   ```
+
+2. **Login to Stripe CLI:**
+   ```bash
+   stripe login
+   ```
+
+3. **Forward webhooks to your local server:**
+   ```bash
+   stripe listen --forward-to localhost:3000/webhook
+   ```
+   
+   This will:
+   - Forward all Stripe events to your local server
+   - Automatically set the `stripe-signature` header
+   - Display the webhook signing secret (starts with `whsec_`)
+   - Show all incoming webhook events in real-time
+
+4. **Copy the webhook signing secret** from the CLI output and add it to your `.env`:
+   ```env
+   STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxx
+   ```
+
+5. **Trigger test events:**
+   ```bash
+   # Trigger a test payment success event
+   stripe trigger payment_intent.succeeded
+   
+   # Trigger a checkout session completed event
+   stripe trigger checkout.session.completed
+   ```
+
+## Stripe Webhook Configuration (Production)
 
 1. Go to [Stripe Dashboard](https://dashboard.stripe.com) → Developers → Webhooks
 2. Click "Add endpoint"
