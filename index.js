@@ -74,9 +74,18 @@ async function storeWebhookEvent(event) {
 // IMPORTANT: Webhook route MUST be defined BEFORE express.json() middleware
 // Stripe webhook signature verification requires the RAW body (Buffer), not parsed JSON
 // Use express.raw() middleware to preserve the exact raw body for signature verification
-app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
   try {
     const sig = req.headers['stripe-signature'];
+
+    console.log('Webhook received');
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('Signature present:', !!sig);
+    console.log('Body type:', typeof req.body);
+    console.log('Is Buffer:', Buffer.isBuffer(req.body));
+    if (Buffer.isBuffer(req.body)) {
+      console.log('Body length:', req.body.length);
+    }
 
     if (!sig) {
       console.error('❌ No stripe-signature header value was provided.');
@@ -99,6 +108,7 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
       event = stripe.webhooks.constructEvent(body, sig, WEBHOOK_SECRET);
     } catch (err) {
       console.error('Webhook signature verification failed:', err.message);
+      console.error('Expected signature for payload length:', Buffer.isBuffer(req.body) ? req.body.length : 'Not a buffer');
       return res.status(400).json({ error: { code: '400', message: `Webhook signature verification failed: ${err.message}` } });
     }
 
