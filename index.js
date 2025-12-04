@@ -105,6 +105,13 @@ app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
     try {
       // Ensure req.body is a Buffer
       const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+      
+      console.log('--- Debugging Signature Verification ---');
+      console.log('Secret configured:', WEBHOOK_SECRET ? `${WEBHOOK_SECRET.substring(0, 8)}...` : 'Missing');
+      console.log('Signature header:', sig);
+      console.log('Body length (bytes):', body.length);
+      console.log('----------------------------------------');
+
       event = stripe.webhooks.constructEvent(body, sig, WEBHOOK_SECRET);
     } catch (err) {
       console.error('Webhook signature verification failed:', err.message);
