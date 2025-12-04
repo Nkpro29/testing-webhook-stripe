@@ -44,11 +44,6 @@ async function initializeDatabase() {
   }
 }
 
-// Middleware to parse raw body for webhook signature verification
-// Stripe requires the raw body, not the parsed JSON
-app.use('/webhook', express.raw({ type: 'application/json' }));
-app.use(express.json());
-
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -76,44 +71,10 @@ async function storeWebhookEvent(event) {
   }
 }
 
-// Create Checkout Session Endpoint
-app.post('/create-checkout-session', async (req, res) => {
-  try {
-    const { amount, currency = 'usd', productName = 'Custom Payment', metadata = {} } = req.body;
-
-    if (!amount) {
-      return res.status(400).json({ error: 'Amount is required' });
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: currency,
-            product_data: {
-              name: productName,
-            },
-            unit_amount: amount, // Amount in cents
-          },
-          quantity: 1,
-        },
-      ],
-      mode: 'payment',
-      success_url: `http://localhost:${PORT}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `http://localhost:${PORT}/cancel`,
-      metadata: metadata,
-    });
-
-    res.json({ id: session.id, url: session.url });
-  } catch (error) {
-    console.error('Error creating checkout session:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Webhook endpoint
-app.post('/webhook', async (req, res) => {
+// IMPORTANT: Webhook route MUST be defined BEFORE express.json() middleware
+// Stripe webhook signature verification requires the RAW body (Buffer), not parsed JSON
+// Use express.raw() middleware to preserve the exact raw body for signature verification
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const sig = req.headers['stripe-signature'];
 
@@ -123,11 +84,19 @@ app.post('/webhook', async (req, res) => {
       return res.status(400).json({ error: { code: '400', message: 'No stripe-signature header value was provided.' } });
     }
 
+    if (!WEBHOOK_SECRET) {
+      console.error('❌ STRIPE_WEBHOOK_SECRET is not set in environment variables.');
+      return res.status(500).json({ error: { code: '500', message: 'Webhook secret not configured' } });
+    }
+
     let event;
 
     // Verify the webhook signature
+    // req.body must be a Buffer (from express.raw()) for signature verification to work
     try {
-      event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
+      // Ensure req.body is a Buffer
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+      event = stripe.webhooks.constructEvent(body, sig, WEBHOOK_SECRET);
     } catch (err) {
       console.error('Webhook signature verification failed:', err.message);
       return res.status(400).json({ error: { code: '400', message: `Webhook signature verification failed: ${err.message}` } });
@@ -226,6 +195,45 @@ app.post('/webhook', async (req, res) => {
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
     res.status(500).json({ error: { code: '500', message: 'A server error has occurred' } });
+  }
+});
+
+// Apply JSON parsing middleware for all other routes (after webhook route)
+app.use(express.json());
+
+// Create Checkout Session Endpoint
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const { amount, currency = 'usd', productName = 'Custom Payment', metadata = {} } = req.body;
+
+    if (!amount) {
+      return res.status(400).json({ error: 'Amount is required' });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: currency,
+            product_data: {
+              name: productName,
+            },
+            unit_amount: amount, // Amount in cents
+          },
+          quantity: 1,
+        },
+      ],
+      mode: 'payment',
+      success_url: `http://localhost:${PORT}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `http://localhost:${PORT}/cancel`,
+      metadata: metadata,
+    });
+
+    res.json({ id: session.id, url: session.url });
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
